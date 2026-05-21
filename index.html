@@ -38,6 +38,7 @@
         select { padding: 10px; border-radius: 8px; background: #0f172a; color: white; border: 1px solid #334155; cursor: pointer; }
         
         strong { color: #facc15; font-size: 1.2rem; }
+        .highlight-selected { background: rgba(255, 255, 0, 0.5) !important; }
     </style>
 </head>
 <body>
@@ -95,6 +96,7 @@
         let openingDictionary = new Map();
         let board = null; let game = new Chess();
         let targetLine = []; let currentMoveIndex = 0;
+        let selectedSquare = null;
         let userColor = 'white'; let isSignUpMode = true;
 
         // Auth Logic
@@ -155,6 +157,7 @@
             if (!board) {
                 board = Chessboard('myBoard', { 
                     draggable: true, position: 'start', onDrop: onDrop,
+                    onSquareClick: onSquareClick,
                     onSnapEnd: () => board.position(game.fen()),
                     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png' 
                 });
@@ -174,6 +177,30 @@
             document.getElementById('status-box').innerText = "Correct!";
             if (currentMoveIndex < targetLine.length) setTimeout(makeCpuMove, 600);
             else document.getElementById('status-box').innerText = "Line Complete!";
+        }
+
+        function onSquareClick(square) {
+            const clearSelection = () => {
+                if (selectedSquare) {
+                    const selectedElement = document.querySelector(`[data-square="${selectedSquare}"]`);
+                    if (selectedElement) selectedElement.classList.remove('highlight-selected');
+                }
+                selectedSquare = null;
+            };
+
+            if (!selectedSquare) {
+                const piece = game.get(square);
+                if (!piece || piece.color !== game.turn()) return;
+                selectedSquare = square;
+                const squareElement = document.querySelector(`[data-square="${square}"]`);
+                if (squareElement) squareElement.classList.add('highlight-selected');
+                return;
+            }
+
+            const source = selectedSquare;
+            clearSelection();
+            const result = onDrop(source, square);
+            if (result === 'snapback') board.position(game.fen());
         }
 
         function getExpected(idx) {
