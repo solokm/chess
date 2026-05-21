@@ -63,7 +63,7 @@
             <option value="black">Play Black</option>
         </select>
 
-        <input type="text" id="opening-search" list="openings-list" placeholder="Search thousands of openings...">
+        <input type="text" id="opening-search" name="opening-search" autocomplete="off" list="openings-list" placeholder="Search thousands of openings...">
         <datalist id="openings-list"></datalist>
         
         <button onclick="loadVariation()">Start Training</button>
@@ -139,8 +139,7 @@
             }
 
             // Fetch Lichess ECO
-            const volumes = ['a', 'b', 'c', 'd', 'e'];
-            for (const v of volumes) {
+            await Promise.all(['a', 'b', 'c', 'd', 'e'].map(async v => {
                 try {
                     const res = await fetch(`https://raw.githubusercontent.com/lichess-org/chess-openings/master/${v}.tsv`);
                     const txt = await res.text();
@@ -152,7 +151,7 @@
                         let opt = document.createElement('option'); opt.value = label; datalist.appendChild(opt);
                     });
                 } catch(e) {}
-            }
+            }));
 
             if (!board) {
                 board = Chessboard('myBoard', { 
@@ -222,6 +221,45 @@
             currentMoveIndex++; promptUser();
         }
 
+
+
+        async function fetchAndShowTheory(moves) {
+            const theoryBox = document.getElementById('theory-box');
+            const intro = (openingDictionary.get(document.getElementById('opening-search').value)?.type === 'custom')
+                ? (openingDictionary.get(document.getElementById('opening-search').value).data.intro || '')
+                : '';
+            theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}Loading theory from Lichess...`;
+            try {
+                const temp = new Chess();
+                for (const m of moves) {
+                    const san = (typeof m === 'object') ? m.m : m;
+                    temp.move(san);
+                }
+                const fen = temp.fen();
+                const res = await fetch(`https://explorer.lichess.ovh/lichess?variant=standard&fen=${encodeURIComponent(fen)}&topGames=0&recentGames=0`);
+                const data = await res.json();
+                const total = (data.white || 0) + (data.draws || 0) + (data.black || 0);
+
+                if (total === 0) {
+                    theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}No Lichess database data for this position.`;
+                    return;
+                }
+
+                const wp = Math.round((data.white || 0) / total * 100);
+                const dp = Math.round((data.draws || 0) / total * 100);
+                const bp = Math.round((data.black || 0) / total * 100);
+                const topMoves = (data.moves || []).slice(0, 3).map(m => {
+                    const moveTotal = (m.white || 0) + (m.draws || 0) + (m.black || 0);
+                    const moveWp = moveTotal ? ((m.white || 0) / moveTotal * 100).toFixed(0) : '0';
+                    return `${m.san} (${moveWp}%)`;
+                }).join(', ');
+
+                theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}<b>Opening:</b> ${data.opening?.name || 'Unknown'}<br><b>Games:</b> ${total.toLocaleString()}<br><b>Results:</b> White ${wp}% / Draw ${dp}% / Black ${bp}%<br><b>Top moves:</b> ${topMoves || 'N/A'}`;
+            } catch (e) {
+                theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}Could not load theory data.`;
+            }
+        }
+
         function loadVariation() {
             const val = document.getElementById('opening-search').value;
             if (!openingDictionary.has(val)) return alert("Select an opening!");
@@ -230,20 +268,30 @@
             
             if (op.type === 'custom') {
                 if (typeof op.data.moves === 'string') {
-                    targetLine = op.data.moves.split(' ').filter(m => !m.includes('.') && m.trim() !== "");
+                    targetLine = op.data.moves.split(' ').filter(m => !m.includes('.') && m.trim() !== '');
                 } else {
                     targetLine = op.data.moves;
                 }
-                document.getElementById('theory-box').innerText = op.data.intro || "Custom Line Loaded.";
             } else {
                 targetLine = op.moves.split(' ').filter(m => !m.includes('.'));
-                document.getElementById('theory-box').innerText = op.name;
             }
             game.reset(); currentMoveIndex = 0;
             board.orientation(userColor); board.start();
+            fetchAndShowTheory(targetLine);
             if (userColor === 'black') setTimeout(makeCpuMove, 800);
             else promptUser();
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!board) {
+                board = Chessboard('myBoard', {
+                    draggable: true, position: 'start', onDrop: onDrop,
+                    onSquareClick: onSquareClick,
+                    onSnapEnd: () => board.position(game.fen()),
+                    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
+                });
+            }
+        });
     </script>
 </body>
 </html>
