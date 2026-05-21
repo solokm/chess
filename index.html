@@ -65,7 +65,7 @@
         </select>
 
         <div class="search-wrapper">
-            <input type="text" id="opening-search" autocomplete="new-opening" list="openings-list" placeholder="Search thousands of openings...">
+            <input type="text" id="opening-search" name="opening-search" autocomplete="off" list="openings-list" placeholder="Search thousands of openings...">
             <datalist id="openings-list"></datalist>
         </div>
         
@@ -102,8 +102,6 @@
         let selectedSquare = null;
         let openingPositionFen = null;
         let userColor = 'white'; let isSignUpMode = true;
-        let openingsLoaded = false;
-        let searchListenerAdded = false;
 
         function initBoard() {
             if (board) return;
@@ -147,9 +145,6 @@
         });
 
         async function initApp() {
-            if (openingsLoaded) return;
-            openingsLoaded = true;
-
             const statusBox = document.getElementById('status-box');
             const datalist = document.getElementById('openings-list');
             datalist.innerHTML = '';
@@ -161,9 +156,7 @@
                 dbOpenings.forEach(op => {
                     const label = `⭐ ${op.variation_name}`;
                     openingDictionary.set(label, { type: 'custom', data: op });
-                    const opt = document.createElement('option');
-                    opt.value = label;
-                    datalist.appendChild(opt);
+                    let opt = document.createElement('option'); opt.value = label; datalist.appendChild(opt);
                 });
             }
 
@@ -175,35 +168,14 @@
                     txt.split('\n').forEach(line => {
                         const r = line.split('\t');
                         if (r.length < 5 || r[0] === 'eco') return;
-                        const label = `${r[1]} [${r[0]}]`;
-                        openingDictionary.set(label, { type: 'eco', eco: r[0], name: r[1], pgn: r[2], uci: r[3], epd: r[4] });
-                        const opt = document.createElement('option');
-                        opt.value = label;
-                        datalist.appendChild(opt);
+                        const label = `[${r[0]}] ${r[1]}`;
+                        openingDictionary.set(label, { type: 'eco', moves: r[2], name: r[1] });
+                        let opt = document.createElement('option'); opt.value = label; datalist.appendChild(opt);
                     });
                 } catch(e) { console.warn(`Failed to load ECO file ${v}.tsv:`, e); }
             }));
             const total = openingDictionary.size;
             statusBox.innerText = `${total.toLocaleString()} openings loaded. Search to begin.`;
-
-            if (!searchListenerAdded) {
-                searchListenerAdded = true;
-                document.getElementById('opening-search').addEventListener('input', function () {
-                    const query = this.value.trim().toLowerCase();
-                    const datalist = document.getElementById('openings-list');
-                    datalist.innerHTML = '';
-                    if (query.length < 2) return;
-                    let count = 0;
-                    for (const key of openingDictionary.keys()) {
-                        if (key.toLowerCase().includes(query)) {
-                            const opt = document.createElement('option');
-                            opt.value = key;
-                            datalist.appendChild(opt);
-                            if (++count >= 40) break;
-                        }
-                    }
-                });
-            }
         }
 
         function onDrop(source, target) {
@@ -322,15 +294,8 @@
         }
 
         function loadVariation() {
-            let val = document.getElementById('opening-search').value;
-            if (!openingDictionary.has(val)) {
-                const lower = val.toLowerCase();
-                for (const key of openingDictionary.keys()) {
-                    if (key.toLowerCase().includes(lower)) { val = key; break; }
-                }
-            }
-            if (!openingDictionary.has(val)) return alert("No matching opening found. Try searching again.");
-            document.getElementById('opening-search').value = val;
+            const val = document.getElementById('opening-search').value;
+            if (!openingDictionary.has(val)) return alert("Select an opening!");
             const op = openingDictionary.get(val);
             userColor = document.getElementById('color-select').value;
             
@@ -341,7 +306,7 @@
                     targetLine = op.data.moves;
                 }
             } else {
-                targetLine = op.pgn
+                targetLine = op.moves
                     .split(/\s+/)
                     .filter(m => m && !/^\d+\./.test(m))
                     .map(m => m.replace(/[!?+#]/g, ''));
