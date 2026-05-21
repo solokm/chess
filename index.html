@@ -97,6 +97,7 @@
         let board = null; let game = new Chess();
         let targetLine = []; let currentMoveIndex = 0;
         let selectedSquare = null;
+        let openingPositionFen = null;
         let userColor = 'white'; let isSignUpMode = true;
 
         // Auth Logic
@@ -138,6 +139,7 @@
                 });
             }
 
+            document.getElementById('status-box').innerText = "Loading opening database...";
             // Fetch Lichess ECO
             await Promise.all(['a', 'b', 'c', 'd', 'e'].map(async v => {
                 try {
@@ -145,13 +147,19 @@
                     const txt = await res.text();
                     txt.split('\n').forEach(line => {
                         const r = line.split('\t');
-                        if (r.length < 3 || r[0] === 'eco') return;
+                        if (r.length < 5 || r[0] === 'eco') return;
                         const label = `[${r[0]}] ${r[1]}`;
-                        openingDictionary.set(label, { type: 'eco', moves: r[2], name: r[1] });
+                        openingDictionary.set(label, { type: 'eco', eco: r[0], name: r[1], pgn: r[2], uci: r[3], epd: r[4] });
                         let opt = document.createElement('option'); opt.value = label; datalist.appendChild(opt);
                     });
-                } catch(e) {}
+                } catch(e) { console.warn('Failed to load ECO file', v, e); }
             }));
+            document.getElementById('status-box').innerText = `${openingDictionary.size.toLocaleString()} openings loaded.`;
+            setTimeout(() => {
+                if (document.getElementById('status-box').innerText.includes('openings loaded')) {
+                    document.getElementById('status-box').innerText = "Welcome! Search an opening to begin.";
+                }
+            }, 2000);
 
             if (!board) {
                 board = Chessboard('myBoard', { 
@@ -164,6 +172,8 @@
         }
 
         function onDrop(source, target) {
+            const expectedTurn = userColor === 'white' ? 'w' : 'b';
+            if (game.turn() !== expectedTurn) return 'snapback';
             let temp = new Chess(game.fen());
             let move = temp.move({ from: source, to: target, promotion: 'q' });
             if (move === null) return 'snapback';
@@ -172,8 +182,10 @@
                 document.getElementById('status-box').innerText = "Wrong move! Try again.";
                 return 'snapback';
             }
-            game.move(move); currentMoveIndex++;
+            game.move({ from: source, to: target, promotion: 'q' }); currentMoveIndex++;
+            board.position(game.fen());
             document.getElementById('status-box').innerText = "Correct!";
+            fetchAndShowTheory();
             if (currentMoveIndex < targetLine.length) setTimeout(makeCpuMove, 600);
             else document.getElementById('status-box').innerText = "Line Complete!";
         }
@@ -189,7 +201,8 @@
 
             if (!selectedSquare) {
                 const piece = game.get(square);
-                if (!piece || piece.color !== game.turn()) return;
+                const expectedTurn = userColor === 'white' ? 'w' : 'b';
+                if (!piece || piece.color !== game.turn() || game.turn() !== expectedTurn) return;
                 selectedSquare = square;
                 const squareElement = document.querySelector(`[data-square="${square}"]`);
                 if (squareElement) squareElement.classList.add('highlight-selected');
@@ -219,42 +232,55 @@
             game.move(getExpected(currentMoveIndex));
             board.position(game.fen());
             currentMoveIndex++; promptUser();
+            fetchAndShowTheory();
         }
 
 
 
-        async function fetchAndShowTheory(moves) {
+        async function fetchAndShowTheory() {
             const theoryBox = document.getElementById('theory-box');
-            const intro = (openingDictionary.get(document.getElementById('opening-search').value)?.type === 'custom')
-                ? (openingDictionary.get(document.getElementById('opening-search').value).data.intro || '')
+            const opening = openingDictionary.get(document.getElementById('opening-search').value);
+            const intro = (opening?.type === 'custom')
+                ? (opening.data.intro || '')
                 : '';
             theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}Loading theory from Lichess...`;
             try {
-                const temp = new Chess();
-                for (const m of moves) {
-                    const san = (typeof m === 'object') ? m.m : m;
-                    temp.move(san);
-                }
-                const fen = temp.fen();
-                const res = await fetch(`https://explorer.lichess.ovh/lichess?variant=standard&fen=${encodeURIComponent(fen)}&topGames=0&recentGames=0`);
-                const data = await res.json();
-                const total = (data.white || 0) + (data.draws || 0) + (data.black || 0);
+                const formatOpeningName = (info) => {
+                    if (!info) return '';
+                    if (info.name) return info.name;
+                    if (info.eco) return `ECO ${info.eco}`;
+                    return '';
+                };
+                const formatStats = (title, data) => {
+                    const total = (data.white || 0) + (data.draws || 0) + (data.black || 0);
+                    if (total === 0) return `<b>${title}:</b> No games found.`;
+                    const wp = Math.round((data.white || 0) / total * 100);
+                    const dp = Math.round((data.draws || 0) / total * 100);
+                    const bp = Math.round((data.black || 0) / total * 100);
+                    const topMoves = (data.moves || []).slice(0, 3).map(m => {
+                        const moveTotal = (m.white || 0) + (m.draws || 0) + (m.black || 0);
+                        const moveWp = moveTotal ? ((m.white || 0) / moveTotal * 100).toFixed(0) : '0';
+                        return `${m.san} (${moveWp}%)`;
+                    }).join(', ');
+                    const openingName = formatOpeningName(data.opening);
+                    return `<b>${title}:</b> ${total.toLocaleString()} games<br><b>Results:</b> White ${wp}% / Draw ${dp}% / Black ${bp}%<br><b>Top moves:</b> ${topMoves || 'N/A'}${openingName ? `<br><b>Opening:</b> ${openingName}` : ''}`;
+                };
 
-                if (total === 0) {
-                    theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}No Lichess database data for this position.`;
-                    return;
-                }
+                const liveFen = game.fen();
+                const params = `variant=standard&speeds=blitz,rapid,classical&ratings=2000,2200,2500&topGames=0&recentGames=0&fen=${encodeURIComponent(liveFen)}`;
+                const openingParams = `variant=standard&speeds=blitz,rapid,classical&ratings=2000,2200,2500&topGames=0&recentGames=0&fen=${encodeURIComponent(openingPositionFen || liveFen)}`;
+                const [communityRes, mastersRes, openingRes] = await Promise.all([
+                    fetch(`https://explorer.lichess.ovh/lichess?${params}`),
+                    fetch(`https://explorer.lichess.ovh/master?${params}`),
+                    fetch(`https://explorer.lichess.ovh/lichess?${openingParams}`)
+                ]);
+                const [communityData, mastersData, openingData] = await Promise.all([
+                    communityRes.json(),
+                    mastersRes.json(),
+                    openingRes.json()
+                ]);
 
-                const wp = Math.round((data.white || 0) / total * 100);
-                const dp = Math.round((data.draws || 0) / total * 100);
-                const bp = Math.round((data.black || 0) / total * 100);
-                const topMoves = (data.moves || []).slice(0, 3).map(m => {
-                    const moveTotal = (m.white || 0) + (m.draws || 0) + (m.black || 0);
-                    const moveWp = moveTotal ? ((m.white || 0) / moveTotal * 100).toFixed(0) : '0';
-                    return `${m.san} (${moveWp}%)`;
-                }).join(', ');
-
-                theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}<b>Opening:</b> ${data.opening?.name || 'Unknown'}<br><b>Games:</b> ${total.toLocaleString()}<br><b>Results:</b> White ${wp}% / Draw ${dp}% / Black ${bp}%<br><b>Top moves:</b> ${topMoves || 'N/A'}`;
+                theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}<b>Opening theory:</b><br>${formatStats('Community (opening position)', openingData)}<br><br><b>Live position theory:</b><br>${formatStats('Community', communityData)}<br><br>${formatStats('Masters', mastersData)}`;
             } catch (e) {
                 theoryBox.innerHTML = `${intro ? `${intro}<br><br>` : ''}Could not load theory data.`;
             }
@@ -273,11 +299,42 @@
                     targetLine = op.data.moves;
                 }
             } else {
-                targetLine = op.moves.split(' ').filter(m => !m.includes('.'));
+                targetLine = op.pgn.split(' ').filter(m => !m.includes('.') && m.trim() !== '');
+                if (!targetLine.length && op.uci) {
+                    const uciTemp = new Chess();
+                    targetLine = op.uci.split(' ').map(m => {
+                        const moveObj = { from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] || 'q' };
+                        const applied = uciTemp.move(moveObj);
+                        return applied ? applied.san : null;
+                    }).filter(Boolean);
+                }
             }
             game.reset(); currentMoveIndex = 0;
+            openingPositionFen = null;
+            if (op.type === 'eco') {
+                if (op.epd) {
+                    openingPositionFen = `${op.epd} 0 1`;
+                } else {
+                    const openingTemp = new Chess();
+                    for (const mv of targetLine) {
+                        const applied = (typeof mv === 'object') ? openingTemp.move(mv) : openingTemp.move(mv);
+                        if (!applied && op.uci) {
+                            const uciTemp = new Chess();
+                            targetLine = op.uci.split(' ').map(m => {
+                                const moveObj = { from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] || 'q' };
+                                const appliedUci = uciTemp.move(moveObj);
+                                return appliedUci ? appliedUci.san : null;
+                            }).filter(Boolean);
+                            openingTemp.reset();
+                            targetLine.forEach(uciMove => openingTemp.move(uciMove));
+                            break;
+                        }
+                    }
+                    openingPositionFen = openingTemp.fen();
+                }
+            }
             board.orientation(userColor); board.start();
-            fetchAndShowTheory(targetLine);
+            fetchAndShowTheory();
             if (userColor === 'black') setTimeout(makeCpuMove, 800);
             else promptUser();
         }
