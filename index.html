@@ -39,6 +39,11 @@
         
         strong { color: #facc15; font-size: 1.2rem; }
         .highlight-selected { background: rgba(255, 255, 0, 0.5) !important; }
+        .search-wrapper { position: relative; width: 100%; max-width: 360px; }
+        #search-dropdown { background: #1e293b; border: 1px solid #334155; border-radius: 8px; max-height: 250px; overflow-y: auto; position: absolute; z-index: 100; width: 100%; display: none; }
+        .search-option { padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #334155; }
+        .search-option:last-child { border-bottom: none; }
+        .search-option:hover { background: #334155; }
     </style>
 </head>
 <body>
@@ -63,8 +68,10 @@
             <option value="black">Play Black</option>
         </select>
 
-        <input type="text" id="opening-search" name="opening-search" autocomplete="off" list="openings-list" placeholder="Search thousands of openings...">
-        <datalist id="openings-list"></datalist>
+        <div class="search-wrapper">
+            <input type="text" id="opening-search" name="opening-search" autocomplete="off" placeholder="Search thousands of openings...">
+            <div id="search-dropdown"></div>
+        </div>
         
         <button onclick="loadVariation()">Start Training</button>
     </div>
@@ -122,12 +129,19 @@
                 document.getElementById('login-trigger').style.display = 'none';
                 document.getElementById('logout-btn').style.display = 'block';
             }
-            initApp();
+            if (!session) {
+                document.getElementById('user-email').innerText = 'Guest Mode';
+                document.getElementById('login-trigger').style.display = 'block';
+                document.getElementById('logout-btn').style.display = 'none';
+            }
         });
 
         async function initApp() {
-            const datalist = document.getElementById('openings-list');
-            datalist.innerHTML = ""; openingDictionary.clear();
+            const openingSearch = document.getElementById('opening-search');
+            const statusBox = document.getElementById('status-box');
+            openingSearch.disabled = true;
+            openingSearch.placeholder = "Loading openings...";
+            openingDictionary.clear();
 
             // Fetch ALL openings from your table (No bouncer restrictions)
             const { data: dbOpenings } = await supabaseClient.from('openings').select('*');
@@ -135,11 +149,10 @@
                 dbOpenings.forEach(op => {
                     const label = `⭐ ${op.variation_name}`;
                     openingDictionary.set(label, { type: 'custom', data: op });
-                    let opt = document.createElement('option'); opt.value = label; datalist.appendChild(opt);
                 });
             }
 
-            document.getElementById('status-box').innerText = "Loading opening database...";
+            statusBox.innerText = "Loading opening database...";
             // Fetch Lichess ECO
             await Promise.all(['a', 'b', 'c', 'd', 'e'].map(async v => {
                 try {
@@ -150,16 +163,12 @@
                         if (r.length < 5 || r[0] === 'eco') return;
                         const label = `[${r[0]}] ${r[1]}`;
                         openingDictionary.set(label, { type: 'eco', eco: r[0], name: r[1], pgn: r[2], uci: r[3], epd: r[4] });
-                        let opt = document.createElement('option'); opt.value = label; datalist.appendChild(opt);
                     });
-                } catch(e) { console.warn('Failed to load ECO file', v, e); }
+                } catch(e) { console.warn('ECO load failed for', v, e); }
             }));
-            document.getElementById('status-box').innerText = `${openingDictionary.size.toLocaleString()} openings loaded.`;
-            setTimeout(() => {
-                if (document.getElementById('status-box').innerText.includes('openings loaded')) {
-                    document.getElementById('status-box').innerText = "Welcome! Search an opening to begin.";
-                }
-            }, 2000);
+            statusBox.innerText = `Loaded ${openingDictionary.size.toLocaleString()} openings. Search to begin.`;
+            openingSearch.disabled = false;
+            openingSearch.placeholder = "Search thousands of openings...";
 
             if (!board) {
                 board = Chessboard('myBoard', { 
@@ -169,6 +178,35 @@
                     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png' 
                 });
             }
+        }
+
+        function renderSearchDropdown(query) {
+            const dropdown = document.getElementById('search-dropdown');
+            dropdown.innerHTML = '';
+            if (!query) {
+                dropdown.style.display = 'none';
+                return;
+            }
+            const q = query.toLowerCase();
+            const matches = Array.from(openingDictionary.keys()).filter(key => key.toLowerCase().includes(q)).slice(0, 30);
+            if (!matches.length) {
+                dropdown.style.display = 'none';
+                return;
+            }
+            matches.forEach(key => {
+                const option = document.createElement('div');
+                option.className = 'search-option';
+                option.innerText = key;
+                option.addEventListener('mousedown', (event) => {
+                    event.preventDefault();
+                    const searchInput = document.getElementById('opening-search');
+                    searchInput.value = key;
+                    dropdown.innerHTML = '';
+                    dropdown.style.display = 'none';
+                });
+                dropdown.appendChild(option);
+            });
+            dropdown.style.display = 'block';
         }
 
         function onDrop(source, target) {
@@ -288,8 +326,13 @@
 
         function loadVariation() {
             const val = document.getElementById('opening-search').value;
-            if (!openingDictionary.has(val)) return alert("Select an opening!");
-            const op = openingDictionary.get(val);
+            let selectedKey = val;
+            if (!openingDictionary.has(selectedKey)) {
+                selectedKey = Array.from(openingDictionary.keys()).find(key => key.toLowerCase().includes(val.toLowerCase()));
+            }
+            if (!selectedKey) return alert("Select an opening!");
+            document.getElementById('opening-search').value = selectedKey;
+            const op = openingDictionary.get(selectedKey);
             userColor = document.getElementById('color-select').value;
             
             if (op.type === 'custom') {
@@ -299,7 +342,10 @@
                     targetLine = op.data.moves;
                 }
             } else {
-                targetLine = op.pgn.split(' ').filter(m => !m.includes('.') && m.trim() !== '');
+                targetLine = op.pgn
+                  .split(/\s+/)
+                  .filter(m => m && !m.match(/^\d+\./) && !m.startsWith('{') && !m.startsWith('('))
+                  .map(m => m.replace(/[!?+#]/g, ''));
                 if (!targetLine.length && op.uci) {
                     const uciTemp = new Chess();
                     targetLine = op.uci.split(' ').map(m => {
@@ -340,6 +386,15 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
+            const openingSearch = document.getElementById('opening-search');
+            const searchDropdown = document.getElementById('search-dropdown');
+            openingSearch.addEventListener('input', (event) => renderSearchDropdown(event.target.value));
+            openingSearch.addEventListener('blur', () => {
+                setTimeout(() => {
+                    searchDropdown.style.display = 'none';
+                    searchDropdown.innerHTML = '';
+                }, 120);
+            });
             if (!board) {
                 board = Chessboard('myBoard', {
                     draggable: true, position: 'start', onDrop: onDrop,
@@ -348,6 +403,7 @@
                     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
                 });
             }
+            initApp();
         });
     </script>
 </body>
