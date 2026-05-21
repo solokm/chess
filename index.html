@@ -40,10 +40,6 @@
         strong { color: #facc15; font-size: 1.2rem; }
         .highlight-selected { background: rgba(255, 255, 0, 0.5) !important; }
         .search-wrapper { position: relative; width: 100%; max-width: 360px; }
-        #search-dropdown { background: #1e293b; border: 1px solid #334155; border-radius: 8px; max-height: 250px; overflow-y: auto; position: absolute; z-index: 100; width: 100%; display: none; }
-        .search-option { padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #334155; }
-        .search-option:last-child { border-bottom: none; }
-        .search-option:hover { background: #334155; }
     </style>
 </head>
 <body>
@@ -69,8 +65,8 @@
         </select>
 
         <div class="search-wrapper">
-            <input type="text" id="opening-search" name="opening-search" autocomplete="off" placeholder="Search thousands of openings...">
-            <div id="search-dropdown"></div>
+            <input type="text" id="opening-search" name="opening-search" list="openings-list" placeholder="Search thousands of openings...">
+            <datalist id="openings-list"></datalist>
         </div>
         
         <button onclick="loadVariation()">Start Training</button>
@@ -137,10 +133,7 @@
         });
 
         async function initApp() {
-            const openingSearch = document.getElementById('opening-search');
             const statusBox = document.getElementById('status-box');
-            openingSearch.disabled = true;
-            openingSearch.placeholder = "Loading openings...";
             openingDictionary.clear();
 
             // Fetch ALL openings from your table (No bouncer restrictions)
@@ -152,7 +145,6 @@
                 });
             }
 
-            statusBox.innerText = "Loading opening database...";
             // Fetch Lichess ECO
             await Promise.all(['a', 'b', 'c', 'd', 'e'].map(async v => {
                 try {
@@ -161,14 +153,13 @@
                     txt.split('\n').forEach(line => {
                         const r = line.split('\t');
                         if (r.length < 5 || r[0] === 'eco') return;
-                        const label = `[${r[0]}] ${r[1]}`;
+                        const label = `${r[1]} [${r[0]}]`;
                         openingDictionary.set(label, { type: 'eco', eco: r[0], name: r[1], pgn: r[2], uci: r[3], epd: r[4] });
                     });
-                } catch(e) { console.warn('ECO load failed for', v, e); }
+                } catch(e) { console.warn(`Failed to load ECO file ${v}.tsv:`, e); }
             }));
-            statusBox.innerText = `Loaded ${openingDictionary.size.toLocaleString()} openings. Search to begin.`;
-            openingSearch.disabled = false;
-            openingSearch.placeholder = "Search thousands of openings...";
+            const total = openingDictionary.size;
+            statusBox.innerText = `${total.toLocaleString()} openings loaded. Search to begin.`;
 
             if (!board) {
                 board = Chessboard('myBoard', { 
@@ -178,35 +169,6 @@
                     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png' 
                 });
             }
-        }
-
-        function renderSearchDropdown(query) {
-            const dropdown = document.getElementById('search-dropdown');
-            dropdown.innerHTML = '';
-            if (!query) {
-                dropdown.style.display = 'none';
-                return;
-            }
-            const q = query.toLowerCase();
-            const matches = Array.from(openingDictionary.keys()).filter(key => key.toLowerCase().includes(q)).slice(0, 30);
-            if (!matches.length) {
-                dropdown.style.display = 'none';
-                return;
-            }
-            matches.forEach(key => {
-                const option = document.createElement('div');
-                option.className = 'search-option';
-                option.innerText = key;
-                option.addEventListener('mousedown', (event) => {
-                    event.preventDefault();
-                    const searchInput = document.getElementById('opening-search');
-                    searchInput.value = key;
-                    dropdown.innerHTML = '';
-                    dropdown.style.display = 'none';
-                });
-                dropdown.appendChild(option);
-            });
-            dropdown.style.display = 'block';
         }
 
         function onDrop(source, target) {
@@ -325,14 +287,16 @@
         }
 
         function loadVariation() {
-            const val = document.getElementById('opening-search').value;
-            let selectedKey = val;
-            if (!openingDictionary.has(selectedKey)) {
-                selectedKey = Array.from(openingDictionary.keys()).find(key => key.toLowerCase().includes(val.toLowerCase()));
+            let val = document.getElementById('opening-search').value;
+            if (!openingDictionary.has(val)) {
+                const lower = val.toLowerCase();
+                for (const key of openingDictionary.keys()) {
+                    if (key.toLowerCase().includes(lower)) { val = key; break; }
+                }
             }
-            if (!selectedKey) return alert("Select an opening!");
-            document.getElementById('opening-search').value = selectedKey;
-            const op = openingDictionary.get(selectedKey);
+            if (!openingDictionary.has(val)) return alert("No matching opening found. Try searching again.");
+            document.getElementById('opening-search').value = val;
+            const op = openingDictionary.get(val);
             userColor = document.getElementById('color-select').value;
             
             if (op.type === 'custom') {
@@ -343,9 +307,9 @@
                 }
             } else {
                 targetLine = op.pgn
-                  .split(/\s+/)
-                  .filter(m => m && !m.match(/^\d+\./) && !m.startsWith('{') && !m.startsWith('('))
-                  .map(m => m.replace(/[!?+#]/g, ''));
+                    .split(/\s+/)
+                    .filter(m => m && !/^\d+\./.test(m))
+                    .map(m => m.replace(/[!?+#]/g, ''));
                 if (!targetLine.length && op.uci) {
                     const uciTemp = new Chess();
                     targetLine = op.uci.split(' ').map(m => {
@@ -385,16 +349,25 @@
             else promptUser();
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            const openingSearch = document.getElementById('opening-search');
-            const searchDropdown = document.getElementById('search-dropdown');
-            openingSearch.addEventListener('input', (event) => renderSearchDropdown(event.target.value));
-            openingSearch.addEventListener('blur', () => {
-                setTimeout(() => {
-                    searchDropdown.style.display = 'none';
-                    searchDropdown.innerHTML = '';
-                }, 120);
+        document.addEventListener('DOMContentLoaded', async () => {
+            await initApp();
+
+            document.getElementById('opening-search').addEventListener('input', function() {
+                const query = this.value.trim().toLowerCase();
+                const datalist = document.getElementById('openings-list');
+                datalist.innerHTML = '';
+                if (query.length < 2) return;
+                let count = 0;
+                for (const key of openingDictionary.keys()) {
+                    if (key.toLowerCase().includes(query)) {
+                        const opt = document.createElement('option');
+                        opt.value = key;
+                        datalist.appendChild(opt);
+                        if (++count >= 40) break;
+                    }
+                }
             });
+
             if (!board) {
                 board = Chessboard('myBoard', {
                     draggable: true, position: 'start', onDrop: onDrop,
@@ -403,7 +376,6 @@
                     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
                 });
             }
-            initApp();
         });
     </script>
 </body>
